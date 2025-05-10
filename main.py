@@ -102,8 +102,15 @@ async def process_input(message: Message):
     if chat_id not in user_data:
         return
     
-    user_data[chat_id].values.append(message.text)
-    await ask_next_service(message)
+    user = user_data[chat_id]
+    try:
+        value = float(message.text)
+        user.values.append(value)
+        await ask_next_service(message)
+    except ValueError:
+        await message.answer("Пожалуйста, введите число!")
+        user.step -= 1  # Go back one step to re-ask for the same service
+        await ask_next_service(message)
 
 async def show_services(message: Message):
     """Show all entered services and calculate total."""
@@ -117,13 +124,9 @@ async def show_services(message: Message):
         response += f"- {service}: {value}\n"
     
     # Calculate total
-    try:
-        total = sum(float(v.replace(',', '.')) for v in user.values)
-        total_response = f"\nИтоговая сумма 🧮: *{total:.2f} рублей*"
-        await message.answer(total_response, parse_mode="Markdown")
-    except ValueError:
-        total_response = "\nНе удалось посчитать итоговую сумму (некоторые значения не являются числами)"
-        await message.answer(total_response)
+    total = sum(user.values)
+    total_response = f"\nИтоговая сумма 🧮: *{total:.2f} рублей*"
+    await message.answer(total_response, parse_mode="Markdown")
     
     await message.answer(response, parse_mode="Markdown")
     
