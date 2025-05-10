@@ -1,0 +1,13 @@
+services:
+  bill_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/bot
+    environment:
+      - TZ=${TZ}
+    restart: unless-stopped
+
+volumes:
+  bill_bot_data:

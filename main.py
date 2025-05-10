@@ -2,133 +2,141 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from typing import Dict, List
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
 
-# Устанавливаем русскую локаль для корректного отображения месяцев
-months_ru = {
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+# Constants
+MONTHS_RU = {
     1: "январь", 2: "февраль", 3: "март", 4: "апрель",
     5: "май", 6: "июнь", 7: "июль", 8: "август",
     9: "сентябрь", 10: "октябрь", 11: "ноябрь", 12: "декабрь"
 }
 
-# Загружаем переменные окружения
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
-
-# Проверяем, найден ли токен
-if not TOKEN:
-    raise ValueError("Токен бота не найден. Проверьте .env файл.")
-
-# Создание бота и диспетчера
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
-# Список услуг
-services = [
+SERVICES = [
     "коммунальные услуги 🏠🛁🚽",
     "доступ в интернет 🛜",
     "вывоз ТБО 🚛",
     "электроэнергия 🔌 ⚡"
 ]
 
-# Словарь для хранения данных пользователя
-user_data = {}
+# Initialize bot and dispatcher
+bot = Bot(token=os.getenv("BOT_TOKEN", "").strip())
+dp = Dispatcher()
 
-# Функция для получения предыдущего месяца на русском языке
-def get_previous_month():
+# User data storage
+class UserData:
+    def __init__(self, month: str):
+        self.step = 0
+        self.values: List[float] = []
+        self.month = month
+
+# Global user data storage
+user_data: Dict[int, UserData] = {}
+
+# Helper functions
+def get_previous_month() -> str:
+    """Get previous month name in Russian."""
     current_month = datetime.now().month
     previous_month = current_month - 1 if current_month > 1 else 12
-    return months_ru[previous_month]
+    return MONTHS_RU[previous_month]
 
-# Кнопки "Запуск" и "Стоп"
-start_stop_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Запуск"), KeyboardButton(text="Стоп")]
-    ],
+# Keyboards
+calculate_keyboard = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="СОСЧИТАТЬ НОВЫЙ СЧЕТ")]],
     resize_keyboard=True
 )
 
-
-# Команда /start
+# Handlers
 @dp.message(Command("start"))
 async def start(message: Message):
+    """Handle /start command."""
     chat_id = message.chat.id
-    user_data[chat_id] = {"step": 0, "values": [], "month": get_previous_month()}
-
+    user_data[chat_id] = UserData(month=get_previous_month())
+    
     await message.answer(
-        f"Привет!👋\nЯ помогу посчитать твои коммунальные платежи 💸 за **{user_data[chat_id]['month']}**.\n"
-        "Нажми кнопку _'СТАРТ'_ для начала ▶️",
-        reply_markup=start_stop_keyboard,
+        f"Привет!👋\nЯ помогу посчитать твои коммунальные платежи 💸 за **{user_data[chat_id].month}**.\n"
+        "Нажмите кнопку, чтобы начать.",
+        reply_markup=calculate_keyboard,
         parse_mode="Markdown"
     )
 
-
-# Обработчик кнопки "Запуск"
-@dp.message(lambda message: message.text == "Запуск")
-async def handle_start_button(message: Message):
+@dp.message(lambda message: message.text == "СОСЧИТАТЬ НОВЫЙ СЧЕТ")
+async def handle_calculate_button(message: Message):
+    """Handle calculate button press."""
     chat_id = message.chat.id
-
     if chat_id not in user_data:
-        user_data[chat_id] = {"step": 0, "values": [], "month": get_previous_month()}
-
+        user_data[chat_id] = UserData(month=get_previous_month())
     await ask_next_service(message)
 
-
-# Обработчик кнопки "Стоп"
-@dp.message(lambda message: message.text == "Стоп")
-async def handle_stop_button(message: Message):
-    chat_id = message.chat.id
-
-    if chat_id in user_data:
-        del user_data[chat_id]  # Очищаем данные пользователя
-
-    await message.answer("Бот остановлен. Напишите /start, чтобы начать заново.", reply_markup=start_stop_keyboard)
-
-
-# Функция для запроса стоимости следующей услуги
 async def ask_next_service(message: Message):
+    """Ask for the next service."""
     chat_id = message.chat.id
-    step = user_data[chat_id]["step"]
-
-    if step < len(services):
+    if chat_id not in user_data:
+        return
+    
+    user = user_data[chat_id]
+    if user.step < len(SERVICES):
         await message.answer(
-            f"Введите стоимость **{services[step]}** за **{user_data[chat_id]['month']}**:",
+            f"Введите **{SERVICES[user.step]}** за **{user.month}**:",
             parse_mode="Markdown"
         )
+        user.step += 1
     else:
-        total = sum(user_data[chat_id]["values"])
-        await message.answer(
-            f"К оплате 💰(всего 🏠🛁🚽🚛🛜🔌) за **{user_data[chat_id]['month']}**: *{total} ₽*",
-            parse_mode="Markdown"
-        )
-        del user_data[chat_id]  # Очищаем данные пользователя
+        await show_services(message)
 
-
-# Обработка ответов пользователя
 @dp.message()
 async def process_input(message: Message):
+    """Process user input."""
     chat_id = message.chat.id
-
     if chat_id not in user_data:
-        await message.answer("Напишите /start, чтобы начать заново.")
         return
+    
+    user_data[chat_id].values.append(message.text)
+    await ask_next_service(message)
 
+async def show_services(message: Message):
+    """Show all entered services and calculate total."""
+    chat_id = message.chat.id
+    if chat_id not in user_data:
+        return
+    
+    user = user_data[chat_id]
+    response = f"Ваши данные за **{user.month}**:\n\n"
+    for service, value in zip(SERVICES, user.values):
+        response += f"- {service}: {value}\n"
+    
+    # Calculate total
     try:
-        value = float(message.text)
-        user_data[chat_id]["values"].append(value)
-        user_data[chat_id]["step"] += 1
-        await ask_next_service(message)
+        total = sum(float(v.replace(',', '.')) for v in user.values)
+        total_response = f"\nИтоговая сумма 🧮: *{total:.2f} рублей*"
+        await message.answer(total_response, parse_mode="Markdown")
     except ValueError:
-        await message.answer("Пожалуйста, введи корректную сумму (число).")
+        total_response = "\nНе удалось посчитать итоговую сумму (некоторые значения не являются числами)"
+        await message.answer(total_response)
+    
+    await message.answer(response, parse_mode="Markdown")
+    
+    # Reset user data
+    del user_data[chat_id]
 
-
-# Запуск бота
+# Main function
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    """Start the bot."""
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
     await dp.start_polling(bot)
 
 
